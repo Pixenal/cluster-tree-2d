@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: 2025 Caleb Dawson
 SPDX-License-Identifier: Apache-2.0
 */
 
-#include <clutreer_tree_2d.h>
+#include <cluster_tree_2d.h>
 
 typedef int32_t I32;
 typedef uint32_t U32;
@@ -123,45 +123,45 @@ void clutreContribFaceToBb(ClutreBb *pBb, const ClutreBb *pFaceBb) {
 
 PixErr clutreInitChildren(
 	ClutreTree *pTree,
-	ClutreNode *pClutreer,
+	ClutreNode *pCluster,
 	I32 pointCount,
 	ClutreNode **ppChildRedir,
-	I8 *pClutreerBuf,
+	I8 *pClusterBuf,
 	PixtyI32Arr *pFaceBuf,
 	ClutreBb *pBbBuf
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	I32 allocIdx = pixalcLinAlloc(&pTree->nodeAlloc, &pClutreer->pChildren, pointCount);
+	I32 allocIdx = pixalcLinAlloc(&pTree->nodeAlloc, &pCluster->pChildren, pointCount);
 	for (I32 i = 0; i < CLUTRE_POINT_COUNT; ++i) {
 		pFaceBuf[i].count = 0;
 	}
-	for (I32 i = pClutreer->faces.start; i < pClutreer->faces.end; ++i) {
-		I32 point = pClutreerBuf[i];
+	for (I32 i = pCluster->faces.start; i < pCluster->faces.end; ++i) {
+		I32 point = pClusterBuf[i];
 		{
 			I32 newIdx = 0;
 			PIXALC_DYN_ARR_ADD(I32, &pTree->alloc, pFaceBuf + point, newIdx);
 			pFaceBuf[point].pArr[newIdx] = pTree->pFaces[i];
 		}
 		if (!ppChildRedir[point]) {
-			PIX_ERR_ASSERT("", pClutreer->childCount < pointCount);
-			ppChildRedir[point] = pClutreer->pChildren + pClutreer->childCount;
+			PIX_ERR_ASSERT("", pCluster->childCount < pointCount);
+			ppChildRedir[point] = pCluster->pChildren + pCluster->childCount;
 			PIX_ERR_ASSERT("", clutreBbValidate(pBbBuf + point));
 			*ppChildRedir[point] = (ClutreNode){
 				.bb = pBbBuf[point],
 				.point = point,
-				.idx = allocIdx + sizeof(ClutreNode) * pClutreer->childCount
+				.idx = allocIdx + sizeof(ClutreNode) * pCluster->childCount
 			};
-			++pClutreer->childCount;
+			++pCluster->childCount;
 		}
 	}
 	return err;
 }
 
-PixErr clutreReorderFaces(ClutreTree *pTree, ClutreNode *pClutreer, PixtyI32Arr *pFaceBuf) {
+PixErr clutreReorderFaces(ClutreTree *pTree, ClutreNode *pCluster, PixtyI32Arr *pFaceBuf) {
 	PixErr err = PIX_ERR_SUCCESS;
-	I32 offset = pClutreer->faces.start;
-	for (I32 i = 0; i < pClutreer->childCount; ++i) {
-		ClutreNode *pChild = pClutreer->pChildren + i;
+	I32 offset = pCluster->faces.start;
+	for (I32 i = 0; i < pCluster->childCount; ++i) {
+		ClutreNode *pChild = pCluster->pChildren + i;
 		if (pFaceBuf[pChild->point].count) {
 			pChild->faces = (PixtyRange){
 				.start = offset,
@@ -175,7 +175,7 @@ PixErr clutreReorderFaces(ClutreTree *pTree, ClutreNode *pClutreer, PixtyI32Arr 
 			offset += pFaceBuf[pChild->point].count;
 		}
 	}
-	PIX_ERR_ASSERT("", offset == pClutreer->faces.end);
+	PIX_ERR_ASSERT("", offset == pCluster->faces.end);
 	return err;
 }
 
@@ -194,14 +194,14 @@ void clutreTreeMemInit(const PixalcFPtrs *pAlloc, ClutreTree *pTree, const Clutr
 void clutreBuildCleanup(
 	const ClutreTree *pTree,
 	ClutreNoise *pNoise,
-	I8 *pClutreerBuf,
+	I8 *pClusterBuf,
 	PixtyI32Arr *pFaceBuf
 ) {
 	const PixalcFPtrs *pAlloc = &pTree->alloc;
 	if (pNoise->pDf) {
 		pAlloc->fpFree(pNoise->pDf);
 	}
-	pAlloc->fpFree(pClutreerBuf);
+	pAlloc->fpFree(pClusterBuf);
 	for (I32 i = 0; i < CLUTRE_POINT_COUNT; ++i) {
 		if (pFaceBuf[i].pArr) {
 			pAlloc->fpFree(pFaceBuf[i].pArr);

@@ -137,7 +137,7 @@ typedef struct ClutreBuildLoopArgs {
 	ClutreTree *pTree;
 	const ClutreMesh *pMesh;
 	const ClutreNoise *pNoise;
-	int8_t *pClutreerBuf;
+	int8_t *pClusterBuf;
 	PixtyI32Arr *pFaceBuf;
 #ifdef CLUTRE_DEBUG_VIS
 	ClutreImg *pImgArr;
@@ -163,7 +163,7 @@ void clutreDumpSampleImg(
 	const ClutreMesh *pMesh,
 	ClutreImg *pImg,
 	const ClutreBb *pFaceBb,
-	const ClutreNode *pClutreer,
+	const ClutreNode *pCluster,
 	PixtyV2_I32 tile
 );
 #endif
@@ -179,19 +179,19 @@ ClutreBb clutreBbScale(ClutreBb bb, float scale);
 void clutreContribFaceToBb(ClutreBb *pBb, const ClutreBb *pFaceBb);
 PixErr clutreInitChildren(
 	ClutreTree *pTree,
-	ClutreNode *pClutreer,
+	ClutreNode *pCluster,
 	int32_t pointCount,
 	ClutreNode **ppChildRedir,
-	int8_t *pClutreerBuf,
+	int8_t *pClusterBuf,
 	PixtyI32Arr *pFaceBuf,
 	ClutreBb *pBbBuf
 );
-PixErr clutreReorderFaces(ClutreTree *pTree, ClutreNode *pClutreer, PixtyI32Arr *pFaceBuf);
+PixErr clutreReorderFaces(ClutreTree *pTree, ClutreNode *pCluster, PixtyI32Arr *pFaceBuf);
 void clutreTreeMemInit(const PixalcFPtrs *pAlloc, ClutreTree *pTree, const ClutreMesh *pMesh);
 void clutreBuildCleanup(
 	const ClutreTree *pTree,
 	ClutreNoise *pNoise,
-	int8_t *pClutreerBuf,
+	int8_t *pClusterBuf,
 	PixtyI32Arr *pFaceBuf
 );
 
@@ -247,7 +247,7 @@ void clutreDumpSampleImg(
 	const ClutreMesh *pMesh,
 	ClutreImg *pImg,
 	const ClutreBb *pFaceBb,
-	const ClutreNode *pClutreer,
+	const ClutreNode *pCluster,
 	PixtyV2_I32 tile
 ) {
 	int32_t imgRes = 2048;
@@ -271,8 +271,8 @@ void clutreDumpSampleImg(
 	float imgSizeMax = imgSize.d[0] > imgSize.d[1] ? imgSize.d[0] : imgSize.d[1];
 	PixtyV2_F32 fTile = {(float)tile.d[0], (float)tile.d[1]};
 	ClutreBb region = {
-		.min = _(_(_(pClutreer->bb.min V2ADD fTile) V2SUB imgBb.min) V2DIVS imgSizeMax),
-		.max = _(_(_(pClutreer->bb.max V2ADD fTile) V2SUB imgBb.min) V2DIVS imgSizeMax)
+		.min = _(_(_(pCluster->bb.min V2ADD fTile) V2SUB imgBb.min) V2DIVS imgSizeMax),
+		.max = _(_(_(pCluster->bb.max V2ADD fTile) V2SUB imgBb.min) V2DIVS imgSizeMax)
 	};
 	PixtyV2_I32 start = {
 		(int32_t)(region.min.d[0] * fImgRes),
@@ -291,13 +291,13 @@ void clutreDumpSampleImg(
 			PixtyV2_F32 pos = {.d = {(float)j, (float)i}};
 			pos = _(pos V2DIVS fImgRes);
 			pos = _(_(_(pos V2MULS imgSizeMax) V2ADD imgBb.min) V2SUB fTile);
-			if (_(pos V2LESS pClutreer->bb.min) || _(pos V2GREAT pClutreer->bb.max)) {
+			if (_(pos V2LESS pCluster->bb.min) || _(pos V2GREAT pCluster->bb.max)) {
 				continue;
 			}
-			for (int32_t k = pClutreer->faces.start; k < pClutreer->faces.end; ++k) {
+			for (int32_t k = pCluster->faces.start; k < pCluster->faces.end; ++k) {
 				ClutreBb faceBb = clutreFaceBbGet(pTree, pMesh, k);
 				if (_(pos V2GREATEQL faceBb.min) && _(pos V2LESSEQL faceBb.max)) {
-					PixtyV3_F32 pixelCol = _(clutreCol[pClutreer->point] V3MULS .33f);
+					PixtyV3_F32 pixelCol = _(clutreCol[pCluster->point] V3MULS .33f);
 					int32_t linIdx = 3 * ((imgRes - 1 - i) * imgRes + j);
 					_((PixtyV3_F32 *)&pImg->pData[linIdx] V3ADDEQL pixelCol);
 					goto nextPixel;
@@ -321,10 +321,10 @@ int32_t clutreStackNextChild(const ClutreStack *pStack) {
 }
 
 static inline
-void clutreStackPush(ClutreStack *pStack, ClutreNode *pClutreer) {
+void clutreStackPush(ClutreStack *pStack, ClutreNode *pCluster) {
 	++pStack->ptr;
 	PIX_ERR_ASSERT("max stack depth hit", pStack->ptr < CLUTRE_STACK_SIZE);
-	pStack->stack[pStack->ptr] = (ClutreStackEntry){.pNode = pClutreer};
+	pStack->stack[pStack->ptr] = (ClutreStackEntry){.pNode = pCluster};
 }
 
 static inline
@@ -344,7 +344,7 @@ const ClutreDfPoint *clutreNoiseSampleAtFace(
 	const ClutreTree *pTree,
 	const ClutreMesh *pMesh,
 	const ClutreNoise *pNoise,
-	const ClutreNode *pClutreer,
+	const ClutreNode *pCluster,
 	int32_t face,
 	float scale,
 	ClutreBb *pFaceBb
@@ -355,7 +355,7 @@ const ClutreDfPoint *clutreNoiseSampleAtFace(
 	}
 	PixtyV2_F32 faceCentre = _(_(faceBb.min V2ADD faceBb.max) V2DIVS 2.0f);
 	const ClutreDfPoint *pSample =
-		clutreNoiseSample(pNoise, faceCentre, clutreBbScale(pClutreer->bb, scale));
+		clutreNoiseSample(pNoise, faceCentre, clutreBbScale(pCluster->bb, scale));
 	return pSample;
 }
 
@@ -365,38 +365,38 @@ PixErr clutreAssignFacesToPoints(
 	const ClutreMesh *pMesh,
 	const ClutreNoise *pNoise,
 	ClutreBb *pBbBuf,
-	int8_t *pClutreerBuf,
+	int8_t *pClusterBuf,
 	ClutreStack *pStack,
 	float scale,
 	int32_t *pPointCount,
 	bool *pRetry
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	ClutreNode *pClutreer = clutreStackTop(pStack);
+	ClutreNode *pCluster = clutreStackTop(pStack);
 	for (int32_t i = 0; i < CLUTRE_POINT_COUNT; ++i) {
 		pBbBuf[i] = (ClutreBb){
 			.min = {.d = {FLT_MAX, FLT_MAX}},
 			.max = {.d = {-FLT_MAX, -FLT_MAX}}
 		};
 	}
-	int32_t perClutreer[CLUTRE_POINT_COUNT] = {0};
-	PixtyRange faces = pClutreer->faces;
+	int32_t perCluster[CLUTRE_POINT_COUNT] = {0};
+	PixtyRange faces = pCluster->faces;
 	for (int32_t i = faces.start; i < faces.end; ++i) {
 		ClutreBb faceBb = {0};
 		const ClutreDfPoint *pSample =
-			clutreNoiseSampleAtFace(pTree, pMesh, pNoise, pClutreer, i, scale, &faceBb);
+			clutreNoiseSampleAtFace(pTree, pMesh, pNoise, pCluster, i, scale, &faceBb);
 		clutreContribFaceToBb(pBbBuf + pSample->nearest, &faceBb);
-		pClutreerBuf[i] = pSample->nearest;
-		++perClutreer[pSample->nearest];
+		pClusterBuf[i] = pSample->nearest;
+		++perCluster[pSample->nearest];
 	}
 	int32_t pointCount = 0;
 	int32_t validCount = 0;
 	for (int32_t i = 0; i < CLUTRE_POINT_COUNT; ++i) {
-		if (!perClutreer[i]) {
+		if (!perCluster[i]) {
 			continue;
 		}
 		++pointCount;
-		if (perClutreer[i] >= CLUTRE_FACE_COUNT_MIN && clutreBbValidate(pBbBuf + i)) {
+		if (perCluster[i] >= CLUTRE_FACE_COUNT_MIN && clutreBbValidate(pBbBuf + i)) {
 			++validCount;
 		}
 	}
@@ -405,17 +405,17 @@ PixErr clutreAssignFacesToPoints(
 		return err;
 	}
 	for (int32_t i = faces.start; i < faces.end; ++i) {
-		int32_t faceCount = perClutreer[pClutreerBuf[i]];
+		int32_t faceCount = perCluster[pClusterBuf[i]];
 		if (faceCount >= CLUTRE_FACE_COUNT_MIN) {
 			continue;
 		}
 		PIX_ERR_ASSERT("", faceCount > 0);
 		ClutreBb faceBb = {0};
 		const ClutreDfPoint *pSample =
-			clutreNoiseSampleAtFace(pTree, pMesh, pNoise, pClutreer, i, scale, &faceBb);
+			clutreNoiseSampleAtFace(pTree, pMesh, pNoise, pCluster, i, scale, &faceBb);
 		int32_t nearest = -1;
 		for (int32_t j = 0; j < CLUTRE_POINT_COUNT; ++j) {
-			if (perClutreer[j] >= CLUTRE_FACE_COUNT_MIN &&
+			if (perCluster[j] >= CLUTRE_FACE_COUNT_MIN &&
 			    (nearest == -1 || pSample->layers[j] < pSample->layers[nearest])
 			) {
 				nearest = j;
@@ -427,8 +427,8 @@ PixErr clutreAssignFacesToPoints(
 			return err;
 		}
 		clutreContribFaceToBb(pBbBuf + nearest, &faceBb);
-		pClutreerBuf[i] = nearest;
-		++perClutreer[nearest];
+		pClusterBuf[i] = nearest;
+		++perCluster[nearest];
 	}
 	if (pRetry) {
 		*pRetry = false;
@@ -442,14 +442,14 @@ PixErr clutreDivide(
 	ClutreTree *pTree,
 	const ClutreMesh *pMesh,
 	const ClutreNoise *pNoise,
-	int8_t *pClutreerBuf,
+	int8_t *pClusterBuf,
 	PixtyI32Arr *pFaceBuf,
 	ClutreStack *pStack
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	ClutreNode *pClutreer = clutreStackTop(pStack);
-	if (pClutreer->pChildren ||
-	    (pClutreer->faces.end - pClutreer->faces.start) <= CLUTRE_FACE_COUNT_MIN
+	ClutreNode *pCluster = clutreStackTop(pStack);
+	if (pCluster->pChildren ||
+	    (pCluster->faces.end - pCluster->faces.start) <= CLUTRE_FACE_COUNT_MIN
 	) {
 		return err;
 	}
@@ -468,7 +468,7 @@ PixErr clutreDivide(
 			pMesh,
 			pNoise,
 			bbBuf,
-			pClutreerBuf,
+			pClusterBuf,
 			pStack,
 			scale,
 			&pointCount,
@@ -485,15 +485,15 @@ PixErr clutreDivide(
 	ClutreNode *childRedir[CLUTRE_POINT_COUNT] = {0};
 	err = clutreInitChildren(
 		pTree,
-		pClutreer,
+		pCluster,
 		pointCount,
 		childRedir,
-		pClutreerBuf,
+		pClusterBuf,
 		pFaceBuf,
 		bbBuf
 	);
 	PIX_ERR_RETURN_IFNOT(err, "");
-	err = clutreReorderFaces(pTree, pClutreer, pFaceBuf);
+	err = clutreReorderFaces(pTree, pCluster, pFaceBuf);
 	PIX_ERR_RETURN_IFNOT(err, "");
 	return err;
 }
@@ -505,7 +505,7 @@ PixErr clutreCallDivide(ClutreStack *pStack, void *pArgsRaw, bool *pAddChildren)
 		pArgs->pTree,
 		pArgs->pMesh,
 		pArgs->pNoise,
-		pArgs->pClutreerBuf,
+		pArgs->pClusterBuf,
 		pArgs->pFaceBuf,
 		pStack
 	);
@@ -557,7 +557,7 @@ PixErr clutreTreeInit(
 	clutreNoiseGen(pAlloc, &noise);
 	ClutreStack stack = {.ptr = -1};
 	clutreStackPush(&stack, pTree->pRoot);
-	int8_t *pClutreerBuf = pAlloc->fpMalloc(pMesh->faceCount);
+	int8_t *pClusterBuf = pAlloc->fpMalloc(pMesh->faceCount);
 	PixtyI32Arr faceBuf[CLUTRE_POINT_COUNT] = {0};
 #ifdef CLUTRE_DEBUG_VIS
 	ClutreImg imgArr[CLUTRE_STACK_SIZE] = {0};
@@ -566,7 +566,7 @@ PixErr clutreTreeInit(
 		.pTree = pTree,
 		.pMesh = pMesh,
 		.pNoise = &noise,
-		.pClutreerBuf = pClutreerBuf,
+		.pClusterBuf = pClusterBuf,
 		.pFaceBuf = faceBuf
 #ifdef CLUTRE_DEBUG_VIS
 		,.pImgArr = imgArr
@@ -591,7 +591,7 @@ PixErr clutreTreeInit(
 		}
 	}
 #endif
-	clutreBuildCleanup(pTree, &noise, pClutreerBuf, faceBuf);
+	clutreBuildCleanup(pTree, &noise, pClusterBuf, faceBuf);
 	return err;
 }
 
@@ -711,7 +711,7 @@ ClutreIntersect clutreBbFaceIntersect(
 #define CLUTRE_FACE_MAX_SIZE 4
 
 static inline
-PixErr clutreSampleClutreer(
+PixErr clutreSampleCluster(
 	const ClutreTree *pTree,
 	ClutreStack *pStack,
 	ClutreArr *pClutreArr,
@@ -726,9 +726,9 @@ PixErr clutreSampleClutreer(
 #endif
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	ClutreNode *pClutreer = clutreStackTop(pStack);
+	ClutreNode *pCluster = clutreStackTop(pStack);
 	ClutreIntersect status =
-		clutreBbFaceIntersect(&pClutreer->bb, faceSize, pPos, pFaceBb, tile);
+		clutreBbFaceIntersect(&pCluster->bb, faceSize, pPos, pFaceBb, tile);
 	bool add = false;
 	switch (status) {
 		case CLUTRE_ENCLOSING:
@@ -738,22 +738,22 @@ PixErr clutreSampleClutreer(
 			*pAddChildren = false;
 			break;
 		default:
-			add = !pClutreer->pChildren;
+			add = !pCluster->pChildren;
 	}
 	if (add) {
-		err = pClutreArr->fpAdd(pClutreArr->pUserData, pClutreer->idx, tile);
+		err = pClutreArr->fpAdd(pClutreArr->pUserData, pCluster->idx, tile);
 		PIX_ERR_RETURN_IFNOT(err, "");
 		#ifdef CLUTRE_DEBUG_VIS
-			clutreDumpSampleImg(pTree, pMesh, pImg, pFaceBb, pClutreer, tile);
+			clutreDumpSampleImg(pTree, pMesh, pImg, pFaceBb, pCluster, tile);
 		#endif
 	}
 	return err;
 }
 
 static inline
-PixErr clutreCallSampleClutreer(ClutreStack *pStack, void *pArgsRaw, bool *pAddChildren) {
+PixErr clutreCallSampleCluster(ClutreStack *pStack, void *pArgsRaw, bool *pAddChildren) {
 	ClutreSampleLoopArgs *pArgs = pArgsRaw;
-	return clutreSampleClutreer(
+	return clutreSampleCluster(
 		pArgs->pTree,
 		pStack,
 		pArgs->pClutreArr,
@@ -842,7 +842,7 @@ PixErr clutreSampleForFace(
 			do {
 				err = clutreLoopBody(
 					&stack,
-					&(ClutreLoopFunc){.func = clutreCallSampleClutreer, .pArgs = &loopArgs}
+					&(ClutreLoopFunc){.func = clutreCallSampleCluster, .pArgs = &loopArgs}
 				);
 				PIX_ERR_RETURN_IFNOT(err, "");
 			} while(stack.ptr >= 0);
@@ -867,14 +867,14 @@ PixErr clutreIdx(const ClutreTree *pTree, int32_t idx, const ClutreNode **ppNode
 static inline
 PixErr clutreFacesGet(
 	const ClutreTree *pTree,
-	const ClutreNode *pClutreer,
+	const ClutreNode *pCluster,
 	ClutreFaceRange *pFaces
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
 	PIX_ERR_RETURN_IFNOT_COND(err, pTree->valid, "");
 	*pFaces = (ClutreFaceRange){
-		.pArr = pTree->pFaces + pClutreer->faces.start,
-		.size = pClutreer->faces.end - pClutreer->faces.start
+		.pArr = pTree->pFaces + pCluster->faces.start,
+		.size = pCluster->faces.end - pCluster->faces.start
 	};
 	return err;
 }
