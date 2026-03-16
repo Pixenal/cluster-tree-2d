@@ -1040,6 +1040,16 @@ PixErr clutreIdx(const ClutreTree *pTree, int32_t idx, const ClutreNode **ppNode
 }
 
 static inline
+PixErr clutreFaceRangeGet(const ClutreTree *pTree, int32_t idx, PixtyRange *pRange) {
+	PixErr err = PIX_ERR_SUCCESS;
+	const ClutreNode *pCluster = NULL;
+	err = clutreIdx(pTree, idx, &pCluster);
+	PIX_ERR_RETURN_IFNOT(err, "");
+	*pRange = pCluster->faces;
+	return err;
+}
+
+static inline
 PixErr clutreFacesGet(
 	const ClutreTree *pTree,
 	const ClutreNode *pCluster,
