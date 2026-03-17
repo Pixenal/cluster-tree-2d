@@ -80,6 +80,14 @@ typedef struct ClutreMesh {
 	int32_t faceCount;
 } ClutreMesh;
 
+typedef enum ClutreIntersect {
+	CLUTRE_NONE,
+	CLUTRE_INTERSECT,
+	CLUTRE_ENCLOSED,
+	CLUTRE_ENCLOSING,
+	CLUTRE_NO_INTERSECT
+} ClutreIntersect;
+
 typedef struct ClutreArr {
 	void *pUserData;
 	PixErr (*fpAdd)(const PixalcFPtrs *, void *, int32_t, ClutreIntersect, PixtyV2_I32);
@@ -124,14 +132,6 @@ typedef struct ClutreFaceRange {
 	const int32_t *pArr;
 	int32_t size;
 } ClutreFaceRange;
-
-typedef enum ClutreIntersect {
-	CLUTRE_NONE,
-	CLUTRE_INTERSECT,
-	CLUTRE_ENCLOSED,
-	CLUTRE_ENCLOSING,
-	CLUTRE_NO_INTERSECT
-} ClutreIntersect;
 
 #ifdef CLUTRE_DEBUG_VIS
 typedef struct ClutreImg {
@@ -875,7 +875,7 @@ PixErr clutreSampleForTile(
 	PixtyV2_I32 tile
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	ClutreNode *pRoot;
+	const ClutreNode *pRoot;
 	if (pStart) {
 		//TODO implement this with a callback, rather than with a set struct
 		ClutreValidIdx startIdx = pStart->arr.pArr[
@@ -885,7 +885,7 @@ PixErr clutreSampleForTile(
 		if (!startIdx.valid) {
 			return err;
 		}
-		pRoot = pixalcLinAllocIdx(&pTree->nodeAlloc, startIdx.idx);
+		pRoot = pixalcLinAllocIdxConst(&pTree->nodeAlloc, startIdx.idx);
 	}
 	else {
 		pRoot = pTree->pRoot;
@@ -933,7 +933,8 @@ PixErr clutreSampleForTile(
 			PIX_ERR_ASSERT("intersect status not set", status != CLUTRE_NONE);
 	}
 	ClutreStack stack = {.ptr = -1};
-	clutreStackPush(&stack, pStart);
+	//TODO temp fix, pStart loses const qualifier here
+	clutreStackPush(&stack, (ClutreNode *)pStart);
 	ClutreSampleLoopArgs loopArgs = {
 		.pTree = pTree,
 		.pClutreArr = pArr,
