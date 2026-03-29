@@ -94,8 +94,8 @@ typedef struct ClutreArr {
 } ClutreArr;
 
 typedef struct ClutreFace {
-	void *pUserData;
-	PixtyV2_F32 (*fpPos)(struct ClutreSample *, int32_t);
+	const void *pUserData;
+	PixtyV2_F32 (*fpPos)(const struct ClutreSample *, int32_t);
 	int32_t size;
 } ClutreFace;
 
