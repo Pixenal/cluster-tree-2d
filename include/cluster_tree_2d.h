@@ -29,7 +29,7 @@ SPDX-License-Identifier: Apache-2.0
 
 #define CLUTRE_DF_RES 64
 #define CLUTRE_STACK_SIZE 16
-#define CLUTRE_FACE_COUNT_MIN 32
+#define CLUTRE_FACE_COUNT_MIN 8
 #define CLUTRE_VALID_MIN (1.0f / 3.0f)
 
 typedef struct ClutreBb {
@@ -404,7 +404,7 @@ PixErr clutreAssignFacesToPoints(
 			.max = {.d = {-FLT_MAX, -FLT_MAX}}
 		};
 	}
-	int32_t perCluster[CLUTRE_POINT_COUNT] = {0};
+	PixtyValidNum perCluster[CLUTRE_POINT_COUNT] = {0};
 	PixtyRange faces = pCluster->faces;
 	for (int32_t i = faces.start; i < faces.end; ++i) {
 		ClutreBb faceBb = {0};
@@ -412,16 +412,17 @@ PixErr clutreAssignFacesToPoints(
 			clutreNoiseSampleAtFace(pTree, pMesh, pNoise, pCluster, i, scale, &faceBb);
 		clutreContribFaceToBb(pBbBuf + pSample->nearest, &faceBb);
 		pClusterBuf[i] = pSample->nearest;
-		++perCluster[pSample->nearest];
+		++perCluster[pSample->nearest].num;
 	}
 	int32_t pointCount = 0;
 	int32_t validCount = 0;
 	for (int32_t i = 0; i < CLUTRE_POINT_COUNT; ++i) {
-		if (!perCluster[i]) {
+		if (!perCluster[i].num) {
 			continue;
 		}
 		++pointCount;
-		if (perCluster[i] >= CLUTRE_FACE_COUNT_MIN && clutreBbValidate(pBbBuf + i)) {
+		if (perCluster[i].num >= CLUTRE_FACE_COUNT_MIN && clutreBbValidate(pBbBuf + i)) {
+			perCluster[i].valid = true;
 			++validCount;
 		}
 	}
@@ -430,17 +431,15 @@ PixErr clutreAssignFacesToPoints(
 		return err;
 	}
 	for (int32_t i = faces.start; i < faces.end; ++i) {
-		int32_t faceCount = perCluster[pClusterBuf[i]];
-		if (faceCount >= CLUTRE_FACE_COUNT_MIN) {
+		if (perCluster[pClusterBuf[i]].valid) {
 			continue;
 		}
-		PIX_ERR_ASSERT("", faceCount > 0);
 		ClutreBb faceBb = {0};
 		const ClutreDfPoint *pSample =
 			clutreNoiseSampleAtFace(pTree, pMesh, pNoise, pCluster, i, scale, &faceBb);
 		int32_t nearest = -1;
 		for (int32_t j = 0; j < CLUTRE_POINT_COUNT; ++j) {
-			if (perCluster[j] >= CLUTRE_FACE_COUNT_MIN &&
+			if (perCluster[j].valid &&
 			    (nearest == -1 || pSample->layers[j] < pSample->layers[nearest])
 			) {
 				nearest = j;
@@ -453,7 +452,7 @@ PixErr clutreAssignFacesToPoints(
 		}
 		clutreContribFaceToBb(pBbBuf + nearest, &faceBb);
 		pClusterBuf[i] = nearest;
-		++perCluster[nearest];
+		++perCluster[nearest].num;
 	}
 	if (pRetry) {
 		*pRetry = false;
@@ -934,12 +933,13 @@ PixErr clutreSampleForTile(
 	}
 	ClutreStack stack = {.ptr = -1};
 	//TODO temp fix, pStart loses const qualifier here
-	clutreStackPush(&stack, (ClutreNode *)pStart);
+	clutreStackPush(&stack, (ClutreNode *)pRoot);
 	ClutreSampleLoopArgs loopArgs = {
 		.pTree = pTree,
 		.pClutreArr = pArr,
 		.enclosed = enclosed,
 		.tile = tile,
+		.faceSize = faceSize,
 		.pPos = pPos,
 		.pFaceBb = &bb
 #ifdef CLUTRE_DEBUG_VIS
@@ -989,17 +989,16 @@ PixErr clutreSampleForFace(
 #endif
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	PIX_ERR_RETURN_IFNOT_COND(
-		err,
-		pFace->size > 0 && pFace->size <= CLUTRE_FACE_MAX_SIZE,
-		""
-	);
+	PIX_ERR_RETURN_IFNOT_COND(err, pFace->size > 0, "");
 	ClutreBb faceBb = {.min = {FLT_MAX, FLT_MAX}, .max = {-FLT_MAX, -FLT_MAX}};
-	PixtyV2_F32 pos[CLUTRE_FACE_MAX_SIZE] = {0};
-	if (!enclosed) {
-		for (int32_t i = 0; i < pFace->size; ++i) {
-			pos[i] = pFace->fpPos(pFace->pUserData, i);
-			clutreBbCmp(&faceBb, pos[i]);
+	PixtyV2_F32 posMem[CLUTRE_FACE_MAX_SIZE] = {0};
+	PixtyV2_F32 *pPos = enclosed || pFace->size <= CLUTRE_FACE_MAX_SIZE ?
+		posMem : pTree->alloc.fpMalloc(sizeof(PixtyV2_F32) * pFace->size);
+	for (int32_t i = 0; i < pFace->size; ++i) {
+		PixtyV2_F32 cornerPos = pFace->fpPos(pFace->pUserData, i);
+		clutreBbCmp(&faceBb, cornerPos);
+		if (!enclosed) {
+			pPos[i] = cornerPos;
 		}
 	}
 	ClutreIBb iFaceBb = {
@@ -1019,7 +1018,7 @@ PixErr clutreSampleForFace(
 				pArr,
 				enclosed,
 				faceBb,
-				pos,
+				pPos,
 				tile
 			);
 		}
@@ -1029,6 +1028,9 @@ PixErr clutreSampleForFace(
 		pTree->alloc.fpFree(img.pData);
 	}
 #endif
+	if (pPos != posMem) {
+		pTree->alloc.fpFree(pPos);
+	}
 	return err;
 }
 

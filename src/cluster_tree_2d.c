@@ -145,11 +145,18 @@ PixErr clutreInitChildren(
 		if (!ppChildRedir[point]) {
 			PIX_ERR_ASSERT("", pCluster->childCount < pointCount);
 			ppChildRedir[point] = pCluster->pChildren + pCluster->childCount;
-			PIX_ERR_ASSERT("", clutreBbValidate(pBbBuf + point));
+			PixtyV2_F32 bbSize = bbSizeGet(pBbBuf + point);
+			if (bbSize.d[0] == .0f || bbSize.d[1] == .0f) {
+				bool side = bbSize.d[0] > .0f;
+				PIX_ERR_ASSERT("", side || bbSize.d[1] > .0f);
+				F32 offset = FLT_EPSILON * 2.0f;
+				pBbBuf[point].min.d[side] -= offset;
+				pBbBuf[point].max.d[side] += offset;
+			}
 			*ppChildRedir[point] = (ClutreNode){
 				.bb = pBbBuf[point],
 				.point = point,
-				.idx = allocIdx + sizeof(ClutreNode) * pCluster->childCount
+				.idx = allocIdx + pCluster->childCount
 			};
 			++pCluster->childCount;
 		}
