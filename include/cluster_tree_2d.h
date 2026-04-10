@@ -205,17 +205,44 @@ void clutreBuildCleanup(
 	PixtyI32Arr *pFaceBuf
 );
 
+typedef struct ClutreValidIdx {
+	uint32_t idx : 31;
+	uint32_t valid : 1;
+} ClutreValidIdx;
+
+typedef struct ClutreValidIdxArr {
+	ClutreValidIdx *pArr;
+	I32 size;
+} ClutreValidIdxArr;
+
+typedef struct ClutreStart {
+	ClutreValidIdxArr arr;
+	PixtyV2_I32 start;
+	PixtyV2_I32 end;
+} ClutreStart;
+
+static inline
+int32_t clutreStartArrSize(const ClutreStart *pStart) {
+	return 1 +
+		(1 + pStart->end.d[0] -	pStart->start.d[0]) *
+		(1 + pStart->end.d[1] - pStart->start.d[1]);
+}
+
 CLUTRE_FORCE_INLINE
 PixErr clutreSampleAdd(
-	const PixalcFPtrs *pAlloc,
+	const ClutreTree *pTree,
 	ClutreArr *pArr,
 	int32_t idx,
 	ClutreIntersect status,
 	PixtyV2_I32 tile
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	PIX_ERR_ASSERT("", status > CLUTRE_NONE && status < CLUTRE_NO_INTERSECT);
-	err = pArr->fpAdd(pAlloc, pArr->pUserData, idx, status, tile);
+	PIX_ERR_ASSERT(
+		"",
+		status > CLUTRE_NONE && status < CLUTRE_NO_INTERSECT &&
+		idx >= 0 && idx < pTree->nodeAlloc.linIdx
+	);
+	err = pArr->fpAdd(&pTree->alloc, pArr->pUserData, idx, status, tile);
 	PIX_ERR_RETURN_IFNOT(err, "");
 	return err;
 }
@@ -337,12 +364,13 @@ nextPixel:
 
 static inline
 ClutreNode *clutreStackTop(ClutreStack *pStack) {
-	return pStack->stack[pStack->ptr].pNode;
+	return pStack->stack[pStack->ptr == -1 ? 0 : pStack->ptr].pNode;
 }
 
 static inline
 int32_t clutreStackNextChild(const ClutreStack *pStack) {
-	return pStack->stack[pStack->ptr].nextChild;
+	PIX_ERR_ASSERT("", pStack->ptr >= -1);
+	return pStack->stack[pStack->ptr == -1 ? 0 : pStack->ptr].nextChild;
 }
 
 static inline
@@ -538,7 +566,8 @@ PixErr clutreCallDivide(ClutreStack *pStack, void *pArgsRaw, bool *pAddChildren)
 CLUTRE_FORCE_INLINE
 PixErr clutreLoopBody(
 	ClutreStack *pStack,
-	ClutreLoopFunc *pFunc
+	ClutreLoopFunc *pFunc,
+	bool *pPopped
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
 	bool addChildren = true;
@@ -552,6 +581,9 @@ PixErr clutreLoopBody(
 	}
 	else {
 		clutreStackPop(pStack);
+		if (pPopped) {
+			*pPopped = true;
+		}
 	}
 	return err;
 }
@@ -599,7 +631,8 @@ PixErr clutreTreeInit(
 	do {
 		err = clutreLoopBody(
 			&stack,
-			&(ClutreLoopFunc){.func = clutreCallDivide, .pArgs = &loopArgs}
+			&(ClutreLoopFunc){.func = clutreCallDivide, .pArgs = &loopArgs},
+			NULL
 		);
 		PIX_ERR_THROW_IFNOT(err, "", 0);
 	} while(stack.ptr >= 0);
@@ -775,7 +808,7 @@ PixErr clutreSampleCluster(
 			add = !pCluster->pChildren;
 	}
 	if (add) {
-		err = clutreSampleAdd(&pTree->alloc, pClutreArr, pCluster->idx, status, tile);
+		err = clutreSampleAdd(pTree, pClutreArr, pCluster->idx, status, tile);
 		PIX_ERR_RETURN_IFNOT(err, "");
 		#ifdef CLUTRE_DEBUG_VIS
 			clutreDumpSampleImg(pTree, pMesh, pImg, pFaceBb, pCluster, tile);
@@ -805,22 +838,6 @@ PixErr clutreCallSampleCluster(ClutreStack *pStack, void *pArgsRaw, bool *pAddCh
 #endif
 	);
 }
-
-typedef struct ClutreValidIdx {
-	uint32_t idx : 31;
-	uint32_t valid : 1;
-} ClutreValidIdx;
-
-typedef struct ClutreValidIdxArr {
-	ClutreValidIdx *pArr;
-	I32 size;
-} ClutreValidIdxArr;
-
-typedef struct ClutreStart {
-	ClutreValidIdxArr arr;
-	PixtyV2_I32 start;
-	PixtyV2_I32 end;
-} ClutreStart;
 
 static
 bool bbCropToTile(const ClutreFace *pFace, PixtyV2_I32 tile, ClutreBb *pBb) {
@@ -878,7 +895,7 @@ PixErr clutreSampleForTile(
 	if (pStart) {
 		//TODO implement this with a callback, rather than with a set struct
 		ClutreValidIdx startIdx = pStart->arr.pArr[
-			(tile.d[1] - pStart->start.d[1]) * (pStart->end.d[0] - pStart->start.d[0]) +
+			(tile.d[1] - pStart->start.d[1]) * (pStart->end.d[0] - pStart->start.d[0] + 1) +
 			tile.d[0] - pStart->start.d[0]
 		];
 		if (!startIdx.valid) {
@@ -900,6 +917,12 @@ PixErr clutreSampleForTile(
 				i % 3 ? bb.min.d[0] : bb.max.d[0],
 				i / 2 ? bb.min.d[1] : bb.max.d[1]
 			};
+			/*
+			pPos[i].d[0] = pPos[i].d[0] < tile.d[0] ? tile.d[0] :
+				pPos[i].d[0] > tile.d[0] + 1.0f ? tile.d[0] + 1.0f : pPos[i].d[0];
+			pPos[i].d[1] = pPos[i].d[1] < tile.d[1] ? tile.d[1] :
+				pPos[i].d[1] > tile.d[1] + 1.0f ? tile.d[1] + 1.0f : pPos[i].d[1];
+			*/
 		}
 		faceSize = 4;
 	}
@@ -920,7 +943,7 @@ PixErr clutreSampleForTile(
 	);
 	switch (status) {
 		case CLUTRE_ENCLOSING:
-			err = clutreSampleAdd(&pTree->alloc, pArr, pRoot->idx, status, tile);
+			err = clutreSampleAdd(pTree, pArr, pRoot->idx, status, tile);
 			PIX_ERR_RETURN_IFNOT(err, "");
 #ifdef CLUTRE_DEBUG_VIS
 			clutreDumpSampleImg(pTree, pMesh, &img, &faceBb, pTree->pRoot, tile);
@@ -928,6 +951,18 @@ PixErr clutreSampleForTile(
 			//v fallthrough v
 		case CLUTRE_NO_INTERSECT:
 			return err;
+		case CLUTRE_INTERSECT:
+			if (enclosed) {
+				err = clutreSampleAdd(
+					pTree,
+					pArr,
+					pTree->pRoot->idx,
+					CLUTRE_ENCLOSED,
+					tile
+				);
+				PIX_ERR_RETURN_IFNOT(err, "");
+				return err;
+			}
 		default:
 			PIX_ERR_ASSERT("intersect status not set", status != CLUTRE_NONE);
 	}
@@ -948,9 +983,11 @@ PixErr clutreSampleForTile(
 #endif
 	};
 	do {
+		bool popped = false;
 		err = clutreLoopBody(
 			&stack,
-			&(ClutreLoopFunc){.func = clutreCallSampleCluster, .pArgs = &loopArgs}
+			&(ClutreLoopFunc){.func = clutreCallSampleCluster, .pArgs = &loopArgs},
+			&popped
 		);
 		PIX_ERR_RETURN_IFNOT(err, "");
 		if (enclosed) {
@@ -959,10 +996,9 @@ PixErr clutreSampleForTile(
 			}
 			const ClutreNode *pCluster = clutreStackTop(&stack);
 			PIX_ERR_ASSERT("", clutreStackNextChild(&stack) <= pCluster->childCount);
-			if (clutreStackNextChild(&stack) == pCluster->childCount
-			) {
+			if (popped && clutreStackNextChild(&stack) == pCluster->childCount) {
 				err = clutreSampleAdd(
-					&pTree->alloc,
+					pTree,
 					pArr,
 					pCluster->idx,
 					CLUTRE_ENCLOSED,
@@ -1002,8 +1038,8 @@ PixErr clutreSampleForFace(
 		}
 	}
 	ClutreIBb iFaceBb = {
-		.min = {(int32_t)faceBb.min.d[0], (int32_t)faceBb.min.d[1]},
-		.max = {(int32_t)faceBb.max.d[0], (int32_t)faceBb.max.d[1]}
+		.min = {(int32_t)floorf(faceBb.min.d[0]), (int32_t)floorf(faceBb.min.d[1])},
+		.max = {(int32_t)floorf(faceBb.max.d[0]), (int32_t)floorf(faceBb.max.d[1])}
 	};
 #ifdef CLUTRE_DEBUG_VIS
 	ClutreImg img = {0};
