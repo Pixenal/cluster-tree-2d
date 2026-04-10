@@ -743,12 +743,16 @@ ClutreIntersect clutreBbFaceIntersect(
 	PixtyV2_I32 tile
 ) {
 	ClutreIntersect status = CLUTRE_NO_INTERSECT;
-	if (pFaceBb->min.d[0] > pBb->max.d[0] || pFaceBb->max.d[0] < pBb->min.d[0] ||
-	    pFaceBb->min.d[1] > pBb->max.d[1] || pFaceBb->max.d[1] < pBb->min.d[1]
+	PixtyV2_F32 fTile = {(float)tile.d[0], (float)tile.d[1]};
+	ClutreBb faceBb = {
+		.min = _(pFaceBb->min V2SUB fTile),
+		.max = _(pFaceBb->max V2SUB fTile)
+	};
+	if (faceBb.min.d[0] > pBb->max.d[0] || faceBb.max.d[0] < pBb->min.d[0] ||
+	    faceBb.min.d[1] > pBb->max.d[1] || faceBb.max.d[1] < pBb->min.d[1]
 	) {
 		return status;
 	}
-	PixtyV2_F32 fTile = {(float)tile.d[0], (float)tile.d[1]};
 	bool sides[4] = {0};
 	for (int32_t i = 0; i < faceSize; ++i) {
 		I32 iNext = (i + 1) % faceSize;
@@ -917,12 +921,10 @@ PixErr clutreSampleForTile(
 				i % 3 ? bb.min.d[0] : bb.max.d[0],
 				i / 2 ? bb.min.d[1] : bb.max.d[1]
 			};
-			/*
 			pPos[i].d[0] = pPos[i].d[0] < tile.d[0] ? tile.d[0] :
 				pPos[i].d[0] > tile.d[0] + 1.0f ? tile.d[0] + 1.0f : pPos[i].d[0];
 			pPos[i].d[1] = pPos[i].d[1] < tile.d[1] ? tile.d[1] :
 				pPos[i].d[1] > tile.d[1] + 1.0f ? tile.d[1] + 1.0f : pPos[i].d[1];
-			*/
 		}
 		faceSize = 4;
 	}
