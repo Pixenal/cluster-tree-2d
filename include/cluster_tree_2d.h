@@ -29,7 +29,7 @@ SPDX-License-Identifier: Apache-2.0
 
 #define CLUTRE_DF_RES 64
 #define CLUTRE_STACK_SIZE 16
-#define CLUTRE_FACE_COUNT_MIN 8
+#define CLUTRE_FACE_COUNT_MIN 32
 #define CLUTRE_VALID_MIN (1.0f / 3.0f)
 
 typedef struct ClutreBb {
