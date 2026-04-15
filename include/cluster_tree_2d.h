@@ -29,7 +29,6 @@ SPDX-License-Identifier: Apache-2.0
 
 #define CLUTRE_DF_RES 64
 #define CLUTRE_STACK_SIZE 16
-#define CLUTRE_FACE_COUNT_MIN 32
 #define CLUTRE_VALID_MIN (1.0f / 3.0f)
 
 typedef struct ClutreBb {
@@ -143,6 +142,7 @@ typedef struct ClutreImg {
 
 typedef struct ClutreBuildLoopArgs {
 	ClutreTree *pTree;
+	I32 minPerClust;
 	const ClutreMesh *pMesh;
 	const ClutreNoise *pNoise;
 	int8_t *pClusterBuf;
@@ -415,6 +415,7 @@ const ClutreDfPoint *clutreNoiseSampleAtFace(
 CLUTRE_FORCE_INLINE
 PixErr clutreAssignFacesToPoints(
 	const ClutreTree *pTree,
+	I32 minPerClust,
 	const ClutreMesh *pMesh,
 	const ClutreNoise *pNoise,
 	ClutreBb *pBbBuf,
@@ -449,7 +450,7 @@ PixErr clutreAssignFacesToPoints(
 			continue;
 		}
 		++pointCount;
-		if (perCluster[i].num >= CLUTRE_FACE_COUNT_MIN && clutreBbValidate(pBbBuf + i)) {
+		if ((I32)perCluster[i].num >= minPerClust && clutreBbValidate(pBbBuf + i)) {
 			perCluster[i].valid = true;
 			++validCount;
 		}
@@ -492,6 +493,7 @@ PixErr clutreAssignFacesToPoints(
 CLUTRE_FORCE_INLINE
 PixErr clutreDivide(
 	ClutreTree *pTree,
+	I32 minPerClust,
 	const ClutreMesh *pMesh,
 	const ClutreNoise *pNoise,
 	int8_t *pClusterBuf,
@@ -501,7 +503,7 @@ PixErr clutreDivide(
 	PixErr err = PIX_ERR_SUCCESS;
 	ClutreNode *pCluster = clutreStackTop(pStack);
 	if (pCluster->pChildren ||
-	    (pCluster->faces.end - pCluster->faces.start) <= CLUTRE_FACE_COUNT_MIN
+	    (pCluster->faces.end - pCluster->faces.start) <= minPerClust
 	) {
 		return err;
 	}
@@ -517,6 +519,7 @@ PixErr clutreDivide(
 		bool retry = false;
 		err = clutreAssignFacesToPoints(
 			pTree,
+			minPerClust,
 			pMesh,
 			pNoise,
 			bbBuf,
@@ -555,6 +558,7 @@ PixErr clutreCallDivide(ClutreStack *pStack, void *pArgsRaw, bool *pAddChildren)
 	ClutreBuildLoopArgs *pArgs = pArgsRaw;
 	return clutreDivide(
 		pArgs->pTree,
+		pArgs->minPerClust,
 		pArgs->pMesh,
 		pArgs->pNoise,
 		pArgs->pClusterBuf,
@@ -603,7 +607,8 @@ CLUTRE_FORCE_INLINE
 PixErr clutreTreeInit(
 	const PixalcFPtrs *pAlloc,
 	const ClutreMesh *pMesh,
-	ClutreTree *pTree
+	ClutreTree *pTree,
+	I32 minPerClust
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
 	err = clutreMeshValidate(pMesh);
@@ -620,6 +625,7 @@ PixErr clutreTreeInit(
 #endif
 	ClutreBuildLoopArgs loopArgs = {
 		.pTree = pTree,
+		.minPerClust = minPerClust,
 		.pMesh = pMesh,
 		.pNoise = &noise,
 		.pClusterBuf = pClusterBuf,
@@ -773,9 +779,14 @@ ClutreIntersect clutreBbFaceIntersect(
 	return sides[0] && sides[1] && sides[2] && sides[3] ? CLUTRE_ENCLOSING : status;
 }
 
+static inline
+bool clutrePointInBb(const ClutreBb *pBb, PixtyV2_F32 pos) {
+	return _(pos V2GREATEQL pBb->min) && _(pos V2LESSEQL pBb->max);
+}
+
 #define CLUTRE_FACE_MAX_SIZE 4
 
-static inline
+CLUTRE_FORCE_INLINE
 PixErr clutreSampleCluster(
 	const ClutreTree *pTree,
 	ClutreStack *pStack,
@@ -822,7 +833,7 @@ PixErr clutreSampleCluster(
 	return err;
 }
 
-static inline
+CLUTRE_FORCE_INLINE
 PixErr clutreCallSampleCluster(ClutreStack *pStack, void *pArgsRaw, bool *pAddChildren) {
 	ClutreSampleLoopArgs *pArgs = pArgsRaw;
 	return clutreSampleCluster(
@@ -841,6 +852,30 @@ PixErr clutreCallSampleCluster(ClutreStack *pStack, void *pArgsRaw, bool *pAddCh
 		pArgs->pImg
 #endif
 	);
+}
+
+CLUTRE_FORCE_INLINE
+PixErr clutrePointSampleCluster(ClutreStack *pStack, void *pArgsRaw, bool *pAddChildren) {
+	ClutreSampleLoopArgs *pArgs = pArgsRaw;
+	PixErr err = PIX_ERR_SUCCESS;
+	ClutreNode *pCluster = clutreStackTop(pStack);
+	bool inside = clutrePointInBb(&pCluster->bb, *pArgs->pPos);
+	if (inside) {
+		if (!pCluster->childCount) {
+			err = clutreSampleAdd(
+				pArgs->pTree,
+				pArgs->pClutreArr,
+				pCluster->idx,
+				CLUTRE_ENCLOSED,
+				pArgs->tile
+			);
+			PIX_ERR_RETURN_IFNOT(err, "");
+		}
+		else {
+			*pAddChildren = true;
+		}
+	}
+	return err;
 }
 
 static
@@ -1014,6 +1049,59 @@ PixErr clutreSampleForTile(
 	return err;
 }
 
+CLUTRE_FORCE_INLINE
+PixErr clutreSampleForTilePoint(
+	const ClutreTree *pTree,
+	const ClutreStart *pStart,
+	ClutreArr *pArr,
+	PixtyV2_F32 pos,
+	PixtyV2_I32 tile
+) {
+	PixErr err = PIX_ERR_SUCCESS;
+	const ClutreNode *pRoot;
+	if (pStart) {
+		//TODO implement this with a callback, rather than with a set struct
+		ClutreValidIdx startIdx = pStart->arr.pArr[
+			(tile.d[1] - pStart->start.d[1]) * (pStart->end.d[0] - pStart->start.d[0] + 1) +
+			tile.d[0] - pStart->start.d[0]
+		];
+		if (!startIdx.valid) {
+			return err;
+		}
+		pRoot = pixalcLinAllocIdxConst(&pTree->nodeAlloc, startIdx.idx);
+	}
+	else {
+		pRoot = pTree->pRoot;
+	}
+	ClutreBb tileBb = {
+		.min = {(float)tile.d[0], (float)tile.d[1]},
+		.max = {(float)(tile.d[0] + 1), (float)(tile.d[1] + 1)}
+	};
+	ClutreStack stack = {.ptr = -1};
+	//TODO temp fix, pStart loses const qualifier here
+	clutreStackPush(&stack, (ClutreNode *)pRoot);
+	ClutreSampleLoopArgs loopArgs = {
+		.pTree = pTree,
+		.pClutreArr = pArr,
+		.tile = tile,
+		.pPos = &pos,
+#ifdef CLUTRE_DEBUG_VIS
+		,.pMesh = pMesh,
+		.pImg = &img
+#endif
+	};
+	do {
+		bool popped = false;
+		err = clutreLoopBody(
+			&stack,
+			&(ClutreLoopFunc){.func = clutrePointSampleCluster, .pArgs = &loopArgs},
+			&popped
+		);
+		PIX_ERR_RETURN_IFNOT(err, "");
+	} while(stack.ptr >= 0);
+	return err;
+}
+
 //TODO replace pix err return with throw where appropriate
 CLUTRE_FORCE_INLINE
 PixErr clutreSampleForFace(
@@ -1069,6 +1157,19 @@ PixErr clutreSampleForFace(
 	if (pPos != posMem) {
 		pTree->alloc.fpFree(pPos);
 	}
+	return err;
+}
+
+CLUTRE_FORCE_INLINE
+PixErr clutreSampleForPoint(
+	const ClutreTree *pTree,
+	const ClutreStart *pStart,
+	PixtyV2_F32 pos,
+	ClutreArr *pArr
+) {
+	PixErr err = PIX_ERR_SUCCESS;
+	PixtyV2_I32 tile = {(I32)pos.d[0], (I32)pos.d[1]};
+	clutreSampleForTilePoint(pTree, pStart, pArr, pos, tile);
 	return err;
 }
 
