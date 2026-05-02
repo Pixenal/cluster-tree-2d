@@ -31,6 +31,7 @@ bool clutreBbValidate(const ClutreBb *pBb) {
 	return bbSize.d[0] > .0f && bbSize.d[1] > .0f; 
 }
 
+#ifndef CLUTRE_PATTERN_GRID
 static
 float radicalInvVdc(U32 i) {
 	i = (i << 16u) | (i >> 16u);
@@ -48,15 +49,12 @@ static
 PixtyV2_F32 hammersley2d(U32 i, U32 num) {
 	return (PixtyV2_F32){.d = {(float)i / (float)num, radicalInvVdc(i)}};
 }
+#endif
 
 void clutreNoiseGen(const PixalcFPtrs *pAlloc, ClutreNoise *pNoise) {
 	I32 posLin = 0;
 	for (U32 i = 0; i < CLUTRE_POINT_COUNT; ++i) {
 #ifdef CLUTRE_PATTERN_GRID
-		PixtyV2_I32 iPos = {.d = {
-			posLin % CLUTRE_POINT_RES,
-			posLin / CLUTRE_POINT_RES
-		}};
 		pNoise->points[i].pos = (PixtyV2_F32){.d = {
 			(F32)(posLin % CLUTRE_POINT_RES) / (F32)CLUTRE_POINT_RES,
 			(F32)(posLin / CLUTRE_POINT_RES) / (F32)CLUTRE_POINT_RES
@@ -131,7 +129,7 @@ PixErr clutreInitChildren(
 	ClutreBb *pBbBuf
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	I32 allocIdx = pixalcLinAlloc(&pTree->nodeAlloc, &pCluster->pChildren, pointCount);
+	I32 allocIdx = pixalcLinAlloc(&pTree->nodeAlloc, (void **)&pCluster->pChildren, pointCount);
 	for (I32 i = 0; i < CLUTRE_POINT_COUNT; ++i) {
 		pFaceBuf[i].count = 0;
 	}
@@ -189,7 +187,7 @@ PixErr clutreReorderFaces(ClutreTree *pTree, ClutreNode *pCluster, PixtyI32Arr *
 void clutreTreeMemInit(const PixalcFPtrs *pAlloc, ClutreTree *pTree, const ClutreMesh *pMesh) {
 	*pTree = (ClutreTree){.alloc = *pAlloc};
 	pixalcLinAllocInit(pAlloc, &pTree->nodeAlloc, sizeof(ClutreNode), 5, false);
-	pixalcLinAlloc(&pTree->nodeAlloc, &pTree->pRoot, 1);
+	pixalcLinAlloc(&pTree->nodeAlloc, (void **)&pTree->pRoot, 1);
 	pTree->pRoot->faces = (PixtyRange){.start = 0, .end = pMesh->faceCount};
 	pTree->pRoot->bb = (ClutreBb){.min = {.d = {.0f, .0f}}, .max = {.d = {1.0f, 1.0f}}};
 	pTree->pFaces = pAlloc->fpMalloc(sizeof(I32) * pMesh->faceCount);

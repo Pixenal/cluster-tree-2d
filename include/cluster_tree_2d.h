@@ -94,7 +94,7 @@ typedef struct ClutreArr {
 
 typedef struct ClutreFace {
 	const void *pUserData;
-	PixtyV2_F32 (*fpPos)(const struct ClutreSample *, int32_t);
+	PixtyV2_F32 (*fpPos)(const void *, int32_t);
 	int32_t size;
 } ClutreFace;
 
@@ -1073,10 +1073,6 @@ PixErr clutreSampleForTilePoint(
 	else {
 		pRoot = pTree->pRoot;
 	}
-	ClutreBb tileBb = {
-		.min = {(float)tile.d[0], (float)tile.d[1]},
-		.max = {(float)(tile.d[0] + 1), (float)(tile.d[1] + 1)}
-	};
 	ClutreStack stack = {.ptr = -1};
 	//TODO temp fix, pStart loses const qualifier here
 	clutreStackPush(&stack, (ClutreNode *)pRoot);
