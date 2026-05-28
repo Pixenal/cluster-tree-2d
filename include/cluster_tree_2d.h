@@ -157,10 +157,11 @@ typedef struct ClutreSampleLoopArgs {
 	ClutreArr *pClutreArr;
 	const PixtyV2_F32 *pPos;
 	const ClutreBb *pFaceBb;
+	const ClutreNode *pClustPendingAdd;
 	PixtyV2_I32 tile;
 	int32_t faceSize;
 	bool enclosed;
-	bool added;
+	bool overlap;
 #ifdef CLUTRE_DEBUG_VIS
 	const ClutreMesh *pMesh;
 	ClutreImg *pImg;
@@ -203,6 +204,13 @@ void clutreBuildCleanup(
 	ClutreNoise *pNoise,
 	int8_t *pClusterBuf,
 	PixtyI32Arr *pFaceBuf
+);
+void clutreHandleIfEnclosed(
+	ClutreStack *pStack,
+	bool popped,
+	bool *pOverlap,
+	const ClutreNode *pClustPendingAdd,
+	const ClutreNode **ppClustEnclosing
 );
 
 typedef struct ClutreValidIdx {
@@ -796,7 +804,8 @@ PixErr clutreSampleCluster(
 	PixtyV2_I32 tile,
 	I32 faceSize,
 	bool enclosed,
-	bool *pAdded,
+	const ClutreNode **ppClustPendingAdd,
+	bool *pOverlap,
 	bool *pAddChildren
 #ifdef CLUTRE_DEBUG_VIS
 	,const ClutreMesh *pMesh,
@@ -807,14 +816,21 @@ PixErr clutreSampleCluster(
 	ClutreNode *pCluster = clutreStackTop(pStack);
 	ClutreIntersect status =
 		clutreBbFaceIntersect(&pCluster->bb, faceSize, pPos, pFaceBb, tile);
-	if (enclosed && status != CLUTRE_ENCLOSED) {
-		*pAdded = *pAddChildren = false;
-		return err;
+	PIX_ERR_ASSERT("", status != CLUTRE_NONE);
+	if (enclosed) {
+		*pOverlap = !pCluster->childCount && status != CLUTRE_NO_INTERSECT;
+		/*
+		if (status != CLUTRE_ENCLOSED) {
+			*pAddChildren = false;
+			return err;
+		}
+		*/
 	}
 	bool add = false;
 	switch (status) {
 		case CLUTRE_ENCLOSING:
-			add = true;
+			//TODO rename enclosed opt to onlyEnclosed or something, this is confusing
+			add = !enclosed;
 			//v fallthrough v
 		case CLUTRE_NO_INTERSECT:
 			*pAddChildren = false;
@@ -823,13 +839,16 @@ PixErr clutreSampleCluster(
 			add = !pCluster->pChildren;
 	}
 	if (add) {
+		if (enclosed) {//if enclosed is true, add is deferred
+			*ppClustPendingAdd = pCluster;
+			return err;
+		}
 		err = clutreSampleAdd(pTree, pClutreArr, pCluster->idx, status, tile);
 		PIX_ERR_RETURN_IFNOT(err, "");
 		#ifdef CLUTRE_DEBUG_VIS
 			clutreDumpSampleImg(pTree, pMesh, pImg, pFaceBb, pCluster, tile);
 		#endif
 	}
-	*pAdded = add;
 	return err;
 }
 
@@ -845,7 +864,8 @@ PixErr clutreCallSampleCluster(ClutreStack *pStack, void *pArgsRaw, bool *pAddCh
 		pArgs->tile,
 		pArgs->faceSize,
 		pArgs->enclosed,
-		&pArgs->added,
+		&pArgs->pClustPendingAdd,
+		&pArgs->overlap,
 		pAddChildren
 #ifdef CLUTRE_DEBUG_VIS
 		,pArgs->pMesh,
@@ -878,8 +898,8 @@ PixErr clutrePointSampleCluster(ClutreStack *pStack, void *pArgsRaw, bool *pAddC
 	return err;
 }
 
-static
-bool bbCropToTile(const ClutreFace *pFace, PixtyV2_I32 tile, ClutreBb *pBb) {
+static inline
+bool clutreBbCropToTile(const ClutreFace *pFace, PixtyV2_I32 tile, ClutreBb *pBb) {
 	*pBb = (ClutreBb){.min = {FLT_MAX, FLT_MAX}, .max = {-FLT_MAX, -FLT_MAX}};
 	PixtyV2_F32 fTile = {(float)tile.d[0], (float)tile.d[1]};
 	bool sides[4] = {0};
@@ -918,6 +938,28 @@ bool bbCropToTile(const ClutreFace *pFace, PixtyV2_I32 tile, ClutreBb *pBb) {
 	return false;
 }
 
+typedef enum ClutreRelation {
+	CLUTRE_RELATION_NONE,
+	CLUTRE_RELATION_PARENT,
+	CLUTRE_RELATION_CHILD
+} ClutreRelation;
+
+//returns relation of cluster b to cluster a
+static inline
+ClutreRelation clutreClustRelationGet(
+	const ClutreNode *pA,
+	const ClutreNode *pB
+) {
+	PIX_ERR_ASSERT("", pA->idx != pB->idx);
+	if (pA->faces.end > pB->faces.start && pA->faces.start < pB->faces.end) {
+		I32 aSize = pA->faces.end - pA->faces.start;
+		I32 bSize = pB->faces.end - pB->faces.start;
+		PIX_ERR_ASSERT("2 clusters occupy the same face range", aSize != bSize);
+		return aSize > bSize ? CLUTRE_RELATION_CHILD : CLUTRE_RELATION_PARENT;
+	}
+	return CLUTRE_RELATION_NONE;
+}
+
 CLUTRE_FORCE_INLINE
 PixErr clutreSampleForTile(
 	const ClutreTree *pTree,
@@ -948,7 +990,7 @@ PixErr clutreSampleForTile(
 	I32 faceSize;
 	ClutreBb bb;
 	if (enclosed) {
-		if (!bbCropToTile(pFace, tile, &bb)) {
+		if (!clutreBbCropToTile(pFace, tile, &bb)) {
 			return err;
 		}
 		for (I32 i = 0; i < 4; ++i) {
@@ -1019,33 +1061,36 @@ PixErr clutreSampleForTile(
 		.pImg = &img
 #endif
 	};
+	const ClutreNode *pClustEnclosing = NULL;//only used if enclosed is true
 	do {
 		bool popped = false;
+		loopArgs.pClustPendingAdd = NULL;
 		err = clutreLoopBody(
 			&stack,
 			&(ClutreLoopFunc){.func = clutreCallSampleCluster, .pArgs = &loopArgs},
 			&popped
 		);
 		PIX_ERR_RETURN_IFNOT(err, "");
-		if (enclosed) {
-			if (loopArgs.added) {
-				break;
-			}
-			const ClutreNode *pCluster = clutreStackTop(&stack);
-			PIX_ERR_ASSERT("", clutreStackNextChild(&stack) <= pCluster->childCount);
-			if (popped && clutreStackNextChild(&stack) == pCluster->childCount) {
-				err = clutreSampleAdd(
-					pTree,
-					pArr,
-					pCluster->idx,
-					CLUTRE_ENCLOSED,
-					tile
-				);
-				PIX_ERR_RETURN_IFNOT(err, "");
-				break;
-			}
+		if (enclosed && stack.ptr >= 0) {
+			clutreHandleIfEnclosed(
+				&stack,
+				popped,
+				&loopArgs.overlap,
+				loopArgs.pClustPendingAdd,
+				&pClustEnclosing
+			);
 		}
 	} while(stack.ptr >= 0);
+	if (pClustEnclosing) {
+		err = clutreSampleAdd(
+			pTree,
+			pArr,
+			pClustEnclosing->idx,
+			CLUTRE_ENCLOSED,
+			tile
+		);
+		PIX_ERR_RETURN_IFNOT(err, "");
+	}
 	return err;
 }
 

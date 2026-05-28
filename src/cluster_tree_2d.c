@@ -213,3 +213,69 @@ void clutreBuildCleanup(
 		}
 	}
 }
+
+static
+void unwindToCommonAncestor(
+	ClutreStack *pStack,
+	const ClutreNode *pA,
+	const ClutreNode *pB
+) {
+	const ClutreNode *pAncestor = NULL;
+	PIX_ERR_ASSERT(
+		"clust param shouldn't be a child of clust at stack top",
+		pStack->ptr > 0
+	);
+	clutreStackPop(pStack);
+	do {
+		const ClutreNode *pClustTop = clutreStackTop(pStack);
+		ClutreRelation relationA = clutreClustRelationGet(pClustTop, pA);
+		ClutreRelation relationB = clutreClustRelationGet(pClustTop, pB);
+		PIX_ERR_ASSERT(
+			"",
+			relationA != CLUTRE_RELATION_PARENT && relationB != CLUTRE_RELATION_PARENT
+		);
+		if (relationA == CLUTRE_RELATION_CHILD && relationA == relationB) {
+			return;
+		}
+	} while(clutreStackPop(pStack), pStack->ptr >= 0);
+}
+
+//TODO clean this up (and 'enclosed' opt in general)
+void clutreHandleIfEnclosed(
+	ClutreStack *pStack,
+	bool popped,
+	bool *pOverlap,
+	const ClutreNode *pClustPendingAdd,
+	const ClutreNode **ppClustEnclosing
+) {
+	const ClutreNode *pCluster;
+	if (pClustPendingAdd) {
+		pCluster = pClustPendingAdd;
+	}
+	else {
+		pCluster = clutreStackTop(pStack);
+		PIX_ERR_ASSERT("", clutreStackNextChild(pStack) <= pCluster->childCount);
+	}
+	if (pClustPendingAdd ||
+		popped && *pOverlap && clutreStackNextChild(pStack) == pCluster->childCount
+	) {
+		*pOverlap = false;
+		if (!*ppClustEnclosing) {
+			*ppClustEnclosing = pCluster;
+			return;
+		}
+		ClutreRelation relation =
+			clutreClustRelationGet(pCluster, *ppClustEnclosing);
+		switch (relation) {
+			case CLUTRE_RELATION_PARENT:
+				PIX_ERR_ASSERT("searching children of enclosing cluster?", false);
+			case CLUTRE_RELATION_CHILD:
+				break;
+			default:
+				unwindToCommonAncestor(pStack, pCluster, *ppClustEnclosing);
+				PIX_ERR_ASSERT("", pStack->ptr >= 0);
+				*ppClustEnclosing = clutreStackTop(pStack);
+				clutreStackPop(pStack);
+		}
+	}
+}
