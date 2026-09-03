@@ -756,7 +756,6 @@ ClutreIntersect clutreBbFaceIntersect(
 	const ClutreBb *pFaceBb,
 	PixtyV2_I32 tile
 ) {
-	ClutreIntersect status = CLUTRE_NO_INTERSECT;
 	PixtyV2_F32 fTile = {(float)tile.d[0], (float)tile.d[1]};
 	ClutreBb faceBb = {
 		.min = _(pFaceBb->min V2SUB fTile),
@@ -765,8 +764,12 @@ ClutreIntersect clutreBbFaceIntersect(
 	if (faceBb.min.d[0] > pBb->max.d[0] || faceBb.max.d[0] < pBb->min.d[0] ||
 	    faceBb.min.d[1] > pBb->max.d[1] || faceBb.max.d[1] < pBb->min.d[1]
 	) {
-		return status;
+		return CLUTRE_NO_INTERSECT;
 	}
+	if (_(faceBb.min V2EQL pBb->min) && _(faceBb.max V2EQL pBb->max)) {
+		return CLUTRE_ENCLOSING;
+	}
+	ClutreIntersect status = CLUTRE_NO_INTERSECT;
 	bool sides[4] = {0};
 	for (int32_t i = 0; i < faceSize; ++i) {
 		I32 iNext = (i + 1) % faceSize;
@@ -777,6 +780,7 @@ ClutreIntersect clutreBbFaceIntersect(
 				return CLUTRE_INTERSECT;
 			case CLUTRE_ENCLOSED:
 				status = CLUTRE_ENCLOSED;
+				break;
 			default:
 				;
 		}
@@ -899,43 +903,89 @@ PixErr clutrePointSampleCluster(ClutreStack *pStack, void *pArgsRaw, bool *pAddC
 }
 
 static inline
-bool clutreBbCropToTile(const ClutreFace *pFace, PixtyV2_I32 tile, ClutreBb *pBb) {
-	*pBb = (ClutreBb){.min = {FLT_MAX, FLT_MAX}, .max = {-FLT_MAX, -FLT_MAX}};
+void clutreBbCmpBorder(
+	ClutreBb *pBb,
+	PixtyV2_F32 min,
+	PixtyV2_F32 max,
+	PixtyV2_F32 normal
+) {
+	for (I32 i = 0; i < 2; ++i) {
+		if (normal.d[i] < .0f) {
+			pBb->min.d[i] = min.d[i] < pBb->min.d[i] ? min.d[i] : pBb->min.d[i];
+		}
+		else if (normal.d[i] > .0f) {
+			pBb->max.d[i] = max.d[i] > pBb->max.d[i] ? max.d[i] : pBb->max.d[i];
+		}
+	}
+}
+
+static inline
+bool clutreBbCropToTile(
+	const ClutreFace *pFace,
+	const ClutreBb *pFaceBb,
+	PixtyV2_I32 tile,
+	ClutreBb *pBb
+) {
 	PixtyV2_F32 fTile = {(float)tile.d[0], (float)tile.d[1]};
+	if (_(pFaceBb->min V2GREAT fTile) && _(pFaceBb->max V2LESS _(fTile V2ADDS 1.0f))) {
+		//face is fully enclosed by tile
+		*pBb = (ClutreBb){.min = fTile, .max = _(fTile V2ADDS 1.0f)};
+		return true;
+	}
+	*pBb = (ClutreBb){.min = {FLT_MAX, FLT_MAX}, .max = {-FLT_MAX, -FLT_MAX}};
+	ClutreIntersect status = CLUTRE_NO_INTERSECT;
 	bool sides[4] = {0};
+	ClutreBb tileBb = {.max = {1.0f, 1.0f}};
 	for (int32_t i = 0; i < pFace->size; ++i) {
 		I32 iNext = (i + 1) % pFace->size;
-		PixtyV2_F32 a = pFace->fpPos(pFace->pUserData, i);
-		PixtyV2_F32 b = pFace->fpPos(pFace->pUserData, iNext);
+		PixtyV2_F32 a = _(pFace->fpPos(pFace->pUserData, i) V2SUB fTile);
+		PixtyV2_F32 b = _(pFace->fpPos(pFace->pUserData, iNext) V2SUB fTile);
+		PixtyV2_F32 ab = _(b V2SUB a);
+		PixtyV2_F32 normal = pixmV2F32LineNormal(ab);
 		PixtyV2_F32 alphas = {0};
-		ClutreIntersect status = clutreSlabTest(
-			a, b,
-			&(ClutreBb){.min = fTile, .max = _(fTile V2ADDS 1.0f)},
-			sides,
-			&alphas
-		);
-		switch (status) {
-			case CLUTRE_ENCLOSED:
-				clutreBbCmp(pBb, a);
-				break;
+		switch (clutreSlabTest(a, b, &tileBb, sides, &alphas)) {
 			case CLUTRE_INTERSECT: {
-				PixtyV2_F32 ab = _(b V2SUB a);
-				clutreBbCmp(pBb, _(a V2ADD _(ab V2MULS alphas.d[0])));
-				clutreBbCmp(pBb, _(a V2ADD _(ab V2MULS alphas.d[1])));
+				PixtyV2_F32 pos0 = _(a V2ADD _(ab V2MULS alphas.d[0]));
+				PixtyV2_F32 pos1 = _(a V2ADD _(ab V2MULS alphas.d[1]));
+				PixtyV2_F32 min = {
+					pos0.d[0] < pos1.d[0] ? pos0.d[0] : pos1.d[0],
+					pos0.d[1] < pos1.d[1] ? pos0.d[1] : pos1.d[1]
+				};
+				PixtyV2_F32 max = {
+					pos0.d[0] > pos1.d[0] ? pos0.d[0] : pos1.d[0],
+					pos0.d[1] > pos1.d[1] ? pos0.d[1] : pos1.d[1]
+				};
+				clutreBbCmpBorder(pBb, min, max, normal);
+				status = CLUTRE_INTERSECT;
+				break;
+			}
+			case CLUTRE_ENCLOSED: {
+				clutreBbCmpBorder(pBb, a, a, normal);
+				status = CLUTRE_ENCLOSED;
 				break;
 			}
 			default:
 				;
 		}
 	}
-	if (_(pBb->min V2LESSEQL _(fTile V2ADDS 1.0f)) && _(pBb->max V2GREATEQL fTile)) {
-		return true;
+	if (status != CLUTRE_NO_INTERSECT) {
+		//set unset values (& clamp to account for near .0 values)
+		for (I32 i = 0; i < 2; ++i) {
+			pBb->min.d[i] = pBb->min.d[i] == FLT_MAX || pBb->min.d[i] < .0f ?
+				.0f : pBb->min.d[i];
+			pBb->max.d[i] = pBb->max.d[i] == -FLT_MAX || pBb->max.d[i] > 1.0f ?
+				1.0f : pBb->max.d[i];
+		}
 	}
-	if (sides[0] && sides[1] && sides[2] && sides[3]) {
-		*pBb = (ClutreBb){.min = fTile, .max = _(fTile V2ADDS 1.0f)};//enclosing
-		return true;
+	else if (sides[0] && sides[1] && sides[2] && sides[3]) {
+		*pBb = tileBb;//face fully encloses tile
 	}
-	return false;
+	else {
+		return false;
+	}
+	_(&pBb->min V2ADDEQL fTile);
+	_(&pBb->max V2ADDEQL fTile);
+	return true;
 }
 
 typedef enum ClutreRelation {
@@ -976,7 +1026,7 @@ PixErr clutreSampleForTile(
 	if (pStart) {
 		//TODO implement this with a callback, rather than with a set struct
 		ClutreValidIdx startIdx = pStart->arr.pArr[
-			(tile.d[1] - pStart->start.d[1]) * (pStart->end.d[0] - pStart->start.d[0] + 1) +
+			(tile.d[1] - pStart->start.d[1]) * (pStart->end.d[0] - pStart->start.d[0]) +
 			tile.d[0] - pStart->start.d[0]
 		];
 		if (!startIdx.valid) {
@@ -990,7 +1040,7 @@ PixErr clutreSampleForTile(
 	I32 faceSize;
 	ClutreBb bb;
 	if (enclosed) {
-		if (!clutreBbCropToTile(pFace, tile, &bb)) {
+		if (!clutreBbCropToTile(pFace, &faceBb, tile, &bb)) {
 			return err;
 		}
 		for (I32 i = 0; i < 4; ++i) {
@@ -998,10 +1048,6 @@ PixErr clutreSampleForTile(
 				i % 3 ? bb.min.d[0] : bb.max.d[0],
 				i / 2 ? bb.min.d[1] : bb.max.d[1]
 			};
-			pPos[i].d[0] = pPos[i].d[0] < tile.d[0] ? tile.d[0] :
-				pPos[i].d[0] > tile.d[0] + 1.0f ? tile.d[0] + 1.0f : pPos[i].d[0];
-			pPos[i].d[1] = pPos[i].d[1] < tile.d[1] ? tile.d[1] :
-				pPos[i].d[1] > tile.d[1] + 1.0f ? tile.d[1] + 1.0f : pPos[i].d[1];
 		}
 		faceSize = 4;
 	}
@@ -1009,16 +1055,12 @@ PixErr clutreSampleForTile(
 		faceSize = pFace->size;
 		bb = faceBb;
 	}
-	ClutreBb tileBb = {
-		.min = {(float)tile.d[0], (float)tile.d[1]},
-		.max = {(float)(tile.d[0] + 1), (float)(tile.d[1] + 1)}
-	};
 	ClutreIntersect status = clutreBbFaceIntersect(
-		&tileBb,
+		&(ClutreBb){.max = {1.0f, 1.0f}},
 		faceSize,
 		pPos,
 		&bb,
-		(PixtyV2_I32){0}
+		tile
 	);
 	switch (status) {
 		case CLUTRE_ENCLOSING:
