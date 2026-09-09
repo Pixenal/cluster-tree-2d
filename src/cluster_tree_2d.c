@@ -137,7 +137,7 @@ PixErr clutreInitChildren(
 		I32 point = pClusterBuf[i];
 		{
 			I32 newIdx = 0;
-			PIXALC_DYN_ARR_ADD(I32, &pTree->alloc, pFaceBuf + point, newIdx);
+			PIXALC_DYN_ARR_ADD(&pTree->alloc, pFaceBuf + point, newIdx);
 			pFaceBuf[point].pArr[newIdx] = pTree->pFaces[i];
 		}
 		if (!ppChildRedir[point]) {
@@ -208,9 +208,7 @@ void clutreBuildCleanup(
 	}
 	pAlloc->fpFree(pClusterBuf);
 	for (I32 i = 0; i < CLUTRE_POINT_COUNT; ++i) {
-		if (pFaceBuf[i].pArr) {
-			pAlloc->fpFree(pFaceBuf[i].pArr);
-		}
+		PIXALC_DYN_ARR_DESTROY(pAlloc, pFaceBuf + i);
 	}
 }
 
