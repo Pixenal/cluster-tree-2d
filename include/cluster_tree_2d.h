@@ -685,7 +685,7 @@ PixtyV2_F32 clutreSlabSeg(PixtyV2_F32 a, PixtyV2_F32 ab, const ClutreBb *pBb, in
 		) {
 			return (PixtyV2_F32){.0f, 1.0f};
 		}
-		return (PixtyV2_F32){-2.0f, 2.0f};
+		return (PixtyV2_F32){-2.0f, -2.0f};
 	}
 	t.d[0] = t.d[0] < .0f ? .0f : t.d[0] > 1.0f ? 1.0f : t.d[0];
 	t.d[1] = t.d[1] < .0f ? .0f : t.d[1] > 1.0f ? 1.0f : t.d[1];
