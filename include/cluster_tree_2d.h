@@ -96,6 +96,7 @@ typedef struct ClutreFace {
 	const void *pUserData;
 	PixtyV2_F32 (*fpPos)(const void *, int32_t);
 	int32_t size;
+	bool wind;
 } ClutreFace;
 
 typedef struct ClutreNoisePoint {
@@ -941,7 +942,7 @@ bool clutreBbCropToTile(
 		PixtyV2_F32 a = _(pFace->fpPos(pFace->pUserData, i) V2SUB fTile);
 		PixtyV2_F32 b = _(pFace->fpPos(pFace->pUserData, iNext) V2SUB fTile);
 		PixtyV2_F32 ab = _(b V2SUB a);
-		PixtyV2_F32 normal = pixmV2F32LineNormal(ab);
+		PixtyV2_F32 normal = _(pixmV2F32LineNormal(ab) V2MULS pFace->wind ? 1.0f : -1.0f);
 		PixtyV2_F32 alphas = {0};
 		switch (clutreSlabTest(a, b, &tileBb, sides, &alphas)) {
 			case CLUTRE_INTERSECT: {
