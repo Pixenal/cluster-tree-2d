@@ -768,7 +768,7 @@ ClutreIntersect clutreBbFaceIntersect(
 		return CLUTRE_NO_INTERSECT;
 	}
 	if (_(faceBb.min V2EQL pBb->min) && _(faceBb.max V2EQL pBb->max)) {
-		return CLUTRE_ENCLOSING;
+		return CLUTRE_ENCLOSED;
 	}
 	ClutreIntersect status = CLUTRE_NO_INTERSECT;
 	bool sides[4] = {0};
@@ -930,7 +930,7 @@ bool clutreBbCropToTile(
 	PixtyV2_F32 fTile = {(float)tile.d[0], (float)tile.d[1]};
 	if (_(pFaceBb->min V2GREAT fTile) && _(pFaceBb->max V2LESS _(fTile V2ADDS 1.0f))) {
 		//face is fully enclosed by tile
-		*pBb = (ClutreBb){.min = fTile, .max = _(fTile V2ADDS 1.0f)};
+		*pBb = *pFaceBb;
 		return true;
 	}
 	*pBb = (ClutreBb){.min = {FLT_MAX, FLT_MAX}, .max = {-FLT_MAX, -FLT_MAX}};
