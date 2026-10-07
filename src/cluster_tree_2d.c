@@ -219,10 +219,9 @@ void unwindToCommonAncestor(
 	const ClutreNode *pB
 ) {
 	const ClutreNode *pAncestor = NULL;
-	PIX_ERR_ASSERT(
-		"clust param shouldn't be a child of clust at stack top",
-		pStack->ptr > 0
-	);
+	if (!pStack->ptr) {
+		return;
+	}
 	clutreStackPop(pStack);
 	do {
 		const ClutreNode *pClustTop = clutreStackTop(pStack);
